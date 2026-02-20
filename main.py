@@ -7,47 +7,79 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load .env for local dev (Render ignores this safely)
 load_dotenv()
 
+# -------------------------------------------------------------------
+# DATABASE CONFIG
+# -------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is not set in environment variables")
+    raise RuntimeError("❌ DATABASE_URL is not set")
 
-# Create async engine
+# 🔥 REQUIRED FIX FOR RENDER + SQLALCHEMY ASYNC
+# Render gives: postgres://
+# SQLAlchemy async needs: postgresql+asyncpg://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgres://",
+        "postgresql+asyncpg://",
+        1,
+    )
+
+# -------------------------------------------------------------------
+# ASYNC ENGINE
+# -------------------------------------------------------------------
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True,          # Set False in production
-    pool_pre_ping=True  # Prevent stale connections
+    echo=False,                 # ❗ keep False in production
+    pool_pre_ping=True,
+    connect_args={
+        "statement_cache_size": 0  # Prevent asyncpg cache issues on Render
+    },
 )
 
-# Create session factory
+# Session factory
 AsyncSessionLocal = sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,
 )
 
-# Lifespan event (recommended instead of on_event)
+# -------------------------------------------------------------------
+# APP LIFESPAN (startup / shutdown)
+# -------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
-        print("✅ Database connected successfully!")
+        print("✅ Database connected successfully")
         yield
     finally:
         await engine.dispose()
         print("🛑 Database connection closed")
 
-app = FastAPI(lifespan=lifespan)
+# -------------------------------------------------------------------
+# FASTAPI APP
+# -------------------------------------------------------------------
+app = FastAPI(
+    title="Revenue Engine",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
-# Dependency to get DB session
+# -------------------------------------------------------------------
+# DEPENDENCIES
+# -------------------------------------------------------------------
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
 
+# -------------------------------------------------------------------
+# ROUTES
+# -------------------------------------------------------------------
 @app.get("/")
 async def root():
     return {"message": "Revenue Engine Running 🚀"}
