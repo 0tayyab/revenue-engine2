@@ -7,37 +7,45 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text
 from dotenv import load_dotenv
 
-# Load .env for local dev (Render ignores this safely)
+# Load .env for local dev only (Render ignores this safely)
 load_dotenv()
 
 # -------------------------------------------------------------------
-# DATABASE CONFIG
+# DATABASE CONFIG — FIXED FOR RENDER (Feb 2026)
 # -------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise RuntimeError("❌ DATABASE_URL is not set")
-
-# 🔥 REQUIRED FIX FOR RENDER + SQLALCHEMY ASYNC
-# Render gives: postgres://
-# SQLAlchemy async needs: postgresql+asyncpg://
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace(
-        "postgres://",
-        "postgresql+asyncpg://",
-        1,
+    raise RuntimeError(
+        "❌ DATABASE_URL is not set!\n"
+        "Go to Render Dashboard → Your Service → Environment → "
+        "Click 'Add Database' and link your Postgres instance."
     )
+
+# 🔥 AUTO-FIX: Render now gives "postgresql://" 
+# We need "postgresql+asyncpg://" for asyncpg driver
+print(f"🔧 Original DATABASE_URL scheme: {DATABASE_URL.split('://')[0] if '://' in DATABASE_URL else 'NONE'}")
+
+if "+asyncpg" not in DATABASE_URL:
+    if DATABASE_URL.startswith("postgresql://"):
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+
+print(f"✅ Final DATABASE_URL scheme: {DATABASE_URL.split('://')[0]}")
+
+# Safety check
+if not DATABASE_URL.startswith("postgresql+asyncpg://"):
+    raise RuntimeError(f"❌ Still invalid DATABASE_URL: {DATABASE_URL}")
 
 # -------------------------------------------------------------------
 # ASYNC ENGINE
 # -------------------------------------------------------------------
 engine = create_async_engine(
     DATABASE_URL,
-    echo=False,                 # ❗ keep False in production
-    pool_pre_ping=True,
-    connect_args={
-        "statement_cache_size": 0  # Prevent asyncpg cache issues on Render
-    },
+    echo=False,                     # Keep False in production
+    pool_pre_ping=True,             # Prevents stale connections on Render
+    connect_args={"statement_cache_size": 0},  # Fixes asyncpg issues
 )
 
 # Session factory
@@ -48,7 +56,7 @@ AsyncSessionLocal = sessionmaker(
 )
 
 # -------------------------------------------------------------------
-# APP LIFESPAN (startup / shutdown)
+# APP LIFESPAN
 # -------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -87,4 +95,4 @@ async def root():
 @app.get("/health")
 async def health_check(db: AsyncSession = Depends(get_db)):
     await db.execute(text("SELECT 1"))
-    return {"status": "OK"}
+    return {"status": "OK", "database": "connected"}
